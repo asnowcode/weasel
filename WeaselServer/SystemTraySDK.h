@@ -145,7 +145,7 @@ public:
 // Implementation
 protected:
     void Initialise();
-    void InstallIconPending();
+    virtual void InstallIconPending();
     ATOM RegisterClass(HINSTANCE hInstance);
 
     virtual void CustomizeMenu(HMENU) {}
@@ -191,7 +191,7 @@ protected:
 // message map functions
 public:
 	LRESULT OnTimer(UINT nIDEvent);
-    LRESULT OnTaskbarCreated(WPARAM wParam, LPARAM lParam);
+    virtual LRESULT OnTaskbarCreated(WPARAM wParam, LPARAM lParam);
 #ifndef _WIN32_WCE
 	LRESULT OnSettingChange(UINT uFlags, LPCTSTR lpszSection);
 #endif

@@ -125,6 +125,10 @@ void WeaselPanel::_ClearTimers() {
     ::KillTimer(m_hWnd, AUTOHIDE_TIMER);
     m_autoHideTimer = 0;
   }
+  if (m_presentRetryTimer) {
+    ::KillTimer(m_hWnd, PRESENT_RETRY_TIMER);
+    m_presentRetryTimer = 0;
+  }
 }
 
 void WeaselPanel::ShowWithTimeout(size_t millisec) {
@@ -494,10 +498,18 @@ void WeaselPanel::DoPaint() {
     m_pD2D->InitDirect2D();
     return;
   }
-  // Make the swap chain available to the composition engine
-  HRESULT hrPresent = m_pD2D->swapChain->Present(1, 0);  // sync
-  if (hrPresent == DXGI_ERROR_DEVICE_REMOVED ||
-      hrPresent == DXGI_ERROR_DEVICE_RESET) {
+  // Make the swap chain available to the composition engine. In WeaselTSF this
+  // runs on the host app's UI thread, where key events are handled too, so it
+  // must neither wait for vblank nor for a compositor that is behind.
+  HRESULT hrPresent = m_pD2D->swapChain->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
+  if (hrPresent == DXGI_ERROR_WAS_STILL_DRAWING) {
+    // not an error: skip this frame and repaint shortly with the latest content
+    if (!m_presentRetryTimer) {
+      m_presentRetryTimer =
+          ::SetTimer(m_hWnd, PRESENT_RETRY_TIMER, PRESENT_RETRY_MS, NULL);
+    }
+  } else if (hrPresent == DXGI_ERROR_DEVICE_REMOVED ||
+             hrPresent == DXGI_ERROR_DEVICE_RESET) {
     DEBUG << "Device lost during Present: " << HRESULTToString(hrPresent);
     DeviceResources::Get().Reset();
     m_pD2D->InitDirect2D();
@@ -888,8 +900,13 @@ void WeaselPanel::_Reposition(bool adj) {
   if (y < rcWorkArea.top)
     y = rcWorkArea.top;
   m_inputPos.bottom = y;
+  // In the server this runs on a pipe worker holding g_api_mutex, while the
+  // window belongs to the message thread. Don't wait for that thread here, or
+  // anything stalling it stalls every client's key events. Same-thread callers
+  // (WeaselTSF) are unaffected by SWP_ASYNCWINDOWPOS.
   SetWindowPos(m_hWnd, HWND_TOPMOST, x, y, 0, 0,
-               SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+               SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW |
+                   SWP_ASYNCWINDOWPOS);
 }
 
 static HBITMAP CopyDCToBitmap(HDC hDC, LPRECT lpRect) {
@@ -1217,7 +1234,12 @@ LRESULT WeaselPanel::MsgHandler(HWND hwnd,
       Refresh();
       return 0;
     case WM_TIMER:
-      if (wParam == AUTOREV_TIMER) {
+      if (wParam == PRESENT_RETRY_TIMER) {
+        ::KillTimer(m_hWnd, PRESENT_RETRY_TIMER);
+        m_presentRetryTimer = 0;
+        RedrawWindow();
+        return 0;
+      } else if (wParam == AUTOREV_TIMER) {
         ::KillTimer(m_hWnd, AUTOREV_TIMER);
         m_clickTimer = 0;
         m_bar_scale = 1.0f;

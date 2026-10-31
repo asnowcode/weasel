@@ -17,7 +17,28 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
       m_schema_ascii_icon(),
       m_disabled(false) {}
 
+WeaselTrayIcon::~WeaselTrayIcon() {
+  DisableRefresh();
+}
+
 void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {}
+
+LRESULT WeaselTrayIcon::OnTrayNotification(WPARAM uID, LPARAM lEvent) {
+  std::lock_guard<std::recursive_mutex> lock(m_tray_mutex);
+  return CSystemTray::OnTrayNotification(uID, lEvent);
+}
+
+void WeaselTrayIcon::InstallIconPending() {
+  std::lock_guard<std::recursive_mutex> lock(m_tray_mutex);
+  CSystemTray::InstallIconPending();
+}
+
+LRESULT WeaselTrayIcon::OnTaskbarCreated(WPARAM wParam, LPARAM lParam) {
+  std::lock_guard<std::recursive_mutex> lock(m_tray_mutex);
+  // the shell lost the icon; force the next Refresh to set it again
+  m_mode = INITIAL;
+  return CSystemTray::OnTaskbarCreated(wParam, lParam);
+}
 
 BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {
   HMODULE hModule = GetModuleHandle(NULL);
@@ -34,6 +55,7 @@ BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {
   } else {
     AddIcon();
   }
+  m_refresh_thread = std::thread([this] { RefreshThreadProc(); });
   return bRet;
 }
 
@@ -43,42 +65,42 @@ void WeaselTrayIcon::RequestRefresh() {
     return;
   }
   m_pending_state = WeaselTrayIconState::From(m_style, m_status);
-  if (m_refresh_pending) {
-    return;
-  }
   m_refresh_pending = true;
-  if (!::PostMessage(GetTargetWnd(), WM_WEASEL_SERVICE_NOTIFY, 0, 0)) {
-    m_refresh_pending = false;
-  }
+  m_state_cv.notify_one();
 }
 
-void WeaselTrayIcon::ApplyRefresh() {
-  WeaselTrayIconState state;
-  {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    if (!m_refresh_pending || !m_refresh_enabled) {
-      return;
+// Pending requests are coalesced: only the latest snapshot is applied.
+void WeaselTrayIcon::RefreshThreadProc() {
+  for (;;) {
+    WeaselTrayIconState state;
+    {
+      std::unique_lock<std::mutex> lock(m_state_mutex);
+      m_state_cv.wait(
+          lock, [this] { return m_refresh_pending || !m_refresh_enabled; });
+      if (!m_refresh_enabled) {
+        return;
+      }
+      state = m_pending_state;
+      m_refresh_pending = false;
     }
-    state = m_pending_state;
-    m_refresh_pending = false;
-    m_refresh_in_progress = true;
+    Refresh(state);
   }
-  Refresh(state);
-  {
-    std::lock_guard<std::mutex> lock(m_state_mutex);
-    m_refresh_in_progress = false;
-  }
-  m_state_cv.notify_all();
 }
 
 void WeaselTrayIcon::DisableRefresh() {
-  std::unique_lock<std::mutex> lock(m_state_mutex);
-  m_refresh_enabled = false;
-  m_refresh_pending = false;
-  m_state_cv.wait(lock, [this] { return !m_refresh_in_progress; });
+  {
+    std::lock_guard<std::mutex> lock(m_state_mutex);
+    m_refresh_enabled = false;
+    m_refresh_pending = false;
+  }
+  m_state_cv.notify_all();
+  if (m_refresh_thread.joinable()) {
+    m_refresh_thread.join();
+  }
 }
 
 void WeaselTrayIcon::Refresh(const WeaselTrayIconState& state) {
+  std::lock_guard<std::recursive_mutex> lock(m_tray_mutex);
   if (!state.display_tray_icon &&
       !state.disabled)  // display notification when deploying
   {
@@ -93,16 +115,13 @@ void WeaselTrayIcon::Refresh(const WeaselTrayIconState& state) {
                         : state.ascii_mode ? ASCII
                                            : ZHUNG;
   /* change icon, when
-          1,mode changed
+          1,mode changed (m_mode starts as INITIAL, so this covers initialize)
           2,icon changed
-          3,both m_schema_zhung_icon and state.current_zhung_icon empty(for
-     initialize) 4,both m_schema_ascii_icon and state.current_ascii_icon
-     empty(for initialize)
+     Refresh runs on every key event and Shell_NotifyIcon can block for as long
+     as the taskbar is busy, so it must not be called when nothing changed.
   */
   if (mode != m_mode || m_schema_zhung_icon != state.current_zhung_icon ||
-      (m_schema_zhung_icon.empty() && state.current_zhung_icon.empty()) ||
-      m_schema_ascii_icon != state.current_ascii_icon ||
-      (m_schema_ascii_icon.empty() && state.current_ascii_icon.empty())) {
+      m_schema_ascii_icon != state.current_ascii_icon) {
     ShowIcon();
     m_mode = mode;
     m_schema_zhung_icon = state.current_zhung_icon;

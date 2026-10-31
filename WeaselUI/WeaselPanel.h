@@ -34,6 +34,8 @@ class WeaselPanel {
 
   static const int AUTOREV_TIMER = 20241209;
   static const int AUTOHIDE_TIMER = 20241107;
+  static const int PRESENT_RETRY_TIMER = 20261031;
+  static const UINT PRESENT_RETRY_MS = 16;
 
   HWND hwnd() const;
 
@@ -126,6 +128,7 @@ class WeaselPanel {
   RECT m_drag_window{0, 0, 0, 0};
   UINT_PTR m_clickTimer = 0;
   UINT_PTR m_autoHideTimer = 0;
+  UINT_PTR m_presentRetryTimer = 0;
   int m_lastWindowWidth = -1;
   int m_lastWindowHeight = -1;
 

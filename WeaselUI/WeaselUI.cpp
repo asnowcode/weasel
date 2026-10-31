@@ -26,7 +26,9 @@ class UIImpl {
     panel.ShowWindow(SW_SHOWNA);
   }
   void Hide() {
-    if (!panel.IsWindow())
+    // Called on every key event in the server, from a pipe worker holding
+    // g_api_mutex; the usual case is the panel is hidden already.
+    if (!IsShown())
       return;
     panel.ShowWindow(SW_HIDE);
   }
