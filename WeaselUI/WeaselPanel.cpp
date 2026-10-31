@@ -905,8 +905,7 @@ void WeaselPanel::_Reposition(bool adj) {
   // anything stalling it stalls every client's key events. Same-thread callers
   // (WeaselTSF) are unaffected by SWP_ASYNCWINDOWPOS.
   SetWindowPos(m_hWnd, HWND_TOPMOST, x, y, 0, 0,
-               SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW |
-                   SWP_ASYNCWINDOWPOS);
+               SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_ASYNCWINDOWPOS);
 }
 
 static HBITMAP CopyDCToBitmap(HDC hDC, LPRECT lpRect) {
